@@ -53,6 +53,28 @@ All the Skale X apps use the same palette: navy surfaces, primary blue `#5173D6`
 `#8FA9EE`. Keep English, Portuguese and Spanish UI strings consistent. Settings and exports use the
 portable data directory; do not commit runtime data or private signing keys.
 
+## Local MCP server
+
+`Xvert.exe --mcp` makes `main()` call `mcp_tools::serve()` before Tauri starts, so no window opens.
+`mcp.rs` is the MCP server over stdio (one JSON-RPC 2.0 message per line: `initialize`, `ping`,
+`tools/list`, `tools/call`, plus the shared `app_info` tool). It is the same file in every Skale app:
+change it in one and copy it to the others. `mcp_tools.rs` lists this app's tools and calls the same
+modules the window uses. Keep stdout for protocol messages only (log with `eprintln!`), and return
+`Err` from a tool instead of panicking: release builds abort on panic. Release builds use the GUI
+subsystem and still talk over the pipes an MCP client opens.
+
+To check by hand, write these lines to the exe's stdin; each request gets one JSON line back:
+
+```text
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}
+{"jsonrpc":"2.0","id":2,"method":"tools/list"}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"app_info","arguments":{}}}
+```
+
+Any MCP client can drive it the same way, for example the MCP Inspector:
+`npx @modelcontextprotocol/inspector "<path>\Xvert.exe" --mcp`.
+`cargo test mcp` runs the protocol tests.
+
 ## Validate a change
 
 Run the checks above when changing application code. Unit tests do not validate real Windows

@@ -66,6 +66,37 @@ The **Engine** page shows which FFmpeg is in use and which formats it can write.
   black.
 - Nothing is uploaded: all converting happens on this PC.
 
+## Use with Claude Code and Codex
+
+`Xvert.exe --mcp` runs Xvert as a local [MCP](https://modelcontextprotocol.io) server, with no
+window, so AI assistants such as Claude Code and Codex can use its engine on this PC. Xvert itself
+sends nothing over the network; what the assistant reads goes to its AI provider, as with anything
+else you share with it. `convert` writes a new file beside the original (or in `out_dir`) and never
+overwrites anything; the other tools only read. FFmpeg is found the same way as in the window.
+
+Claude Code (available in every project):
+
+```bash
+claude mcp add --scope user xvert -- "C:\Apps\Xvert\Xvert.exe" --mcp
+```
+
+Codex, in `%USERPROFILE%\.codex\config.toml`:
+
+```toml
+[mcp_servers.xvert]
+command = 'C:\Apps\Xvert\Xvert.exe'
+args = ["--mcp"]
+```
+
+Use the path where your `Xvert.exe` is. Tools:
+
+- `app_info`: version, where the exe and `Data` folder are, and the saved settings.
+- `engine_status`: whether FFmpeg was found, its version, and the formats it can write.
+- `probe`: `path`, `limit`: kind, duration, size, resolution, codecs and more for a file or the
+  media in a folder.
+- `convert`: `path`, `format`, `quality`, `max_height`, `mute`, `out_dir`: converts one file and
+  returns the new path and size.
+
 ## Development
 
 Tauri 2, Rust and plain HTML/CSS/JavaScript. See the [development and release
@@ -87,6 +118,9 @@ administrador. Ainda não há release publicada (27/10/2026); veja as
 - Qualidade, tamanho máximo da imagem, tirar o som dos vídeos e a pasta de saída ficam no painel
   **Saída**.
 - Os originais nunca são alterados. Se a conversão for cancelada ou falhar, nada fica para trás.
+- **Claude Code e Codex**: `Xvert.exe --mcp` roda o Xvert como servidor MCP local, sem janela, para
+  assistentes de IA usarem a leitura e a conversão de arquivos (converter só cria arquivos novos).
+  Veja [Use with Claude Code and Codex](#use-with-claude-code-and-codex).
 
 ## Español
 
@@ -102,6 +136,9 @@ administrador. Aún no hay release publicada (27/10/2026); consulta las
 - La calidad, el tamaño máximo, quitar el sonido de los vídeos y la carpeta de salida están en el
   panel **Salida**.
 - Los originales nunca se modifican. Si una conversión se cancela o falla, no queda nada a medias.
+- **Claude Code y Codex**: `Xvert.exe --mcp` ejecuta Xvert como servidor MCP local, sin ventana,
+  para que asistentes de IA usen la lectura y la conversión de archivos (convertir solo crea
+  archivos nuevos). Consulta [Use with Claude Code and Codex](#use-with-claude-code-and-codex).
 
 ## Skale Club apps
 
@@ -111,11 +148,9 @@ Portuguese and Spanish UI text. Each app has its own executable and portable Dat
 
 | App | Purpose |
 | --- | --- |
+| [Xpecs](https://github.com/Skale-Club/xpecs) | Care for the PC (cleaning, disk space, drivers, startup, apps) and inspect hardware, live sensors and benchmarks |
 | [Xink](https://github.com/Skale-Club/xink) | Draw over the screen during presentations or recordings |
-| [Xpecs](https://github.com/Skale-Club/xpecs) | Inspect hardware, live sensors and benchmark results |
-| [Xcare](https://github.com/Skale-Club/xcare) | Clean selected files, manage startup programs and explicitly remove stubborn files |
 | [Xnote](https://github.com/Skale-Club/xnote) | Transcribe meetings and turn notes into summaries and tasks |
-| [Xpace](https://github.com/Skale-Club/xpace) | Analyze disk usage with a folder tree, treemap, largest files and file-type totals |
 | [Xvert](https://github.com/Skale-Club/xvert) | Convert videos, music and pictures between formats |
 
 Repository access may be required depending on project visibility. Report problems through the

@@ -7,6 +7,8 @@
 mod engine;
 mod formats;
 mod job;
+mod mcp;
+mod mcp_tools;
 mod media;
 mod portable;
 mod updater;
@@ -322,6 +324,9 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
 fn main() {
     updater::finish_previous();
     portable::sync_appinfo();
+    if mcp::requested() {
+        return mcp_tools::serve();
+    }
     tauri::Builder::default()
         .manage(AppState {
             settings: Mutex::new(load_settings()),
