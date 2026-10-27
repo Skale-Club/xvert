@@ -1,0 +1,15 @@
+{
+  "name": "xvert",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build --no-bundle",
+    "tauri": "tauri",
+    "verify:icon": "node scripts/verify-windows-icon.cjs",
+    "postbuild": "npm run verify:icon"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}
