@@ -33,8 +33,7 @@ const I18N = {
       formatsTitle: 'Formats', formatsNote: 'What this FFmpeg can write. Xvert reads almost any video, audio or picture file.',
       unavailable: 'Not in this FFmpeg build',
       failedGeneric: 'Something went wrong: {error}',
-      updateAvailable: 'Xvert {v} is available.', updateNow: 'Update now', updating: 'Updating…',
-      updateFailed: 'Update failed: {error}',
+      updateStopsJobs: 'Restarting now cancels the conversions in progress.',
     },
   },
   pt: {
@@ -68,8 +67,7 @@ const I18N = {
       formatsTitle: 'Formatos', formatsNote: 'O que este FFmpeg consegue gravar. O Xvert lê quase qualquer arquivo de vídeo, áudio ou imagem.',
       unavailable: 'Não está nesta versão do FFmpeg',
       failedGeneric: 'Algo deu errado: {error}',
-      updateAvailable: 'O Xvert {v} está disponível.', updateNow: 'Atualizar agora', updating: 'Atualizando…',
-      updateFailed: 'A atualização falhou: {error}',
+      updateStopsJobs: 'Reiniciar agora cancela as conversões em andamento.',
     },
   },
   es: {
@@ -103,8 +101,7 @@ const I18N = {
       formatsTitle: 'Formatos', formatsNote: 'Lo que este FFmpeg puede escribir. Xvert lee casi cualquier archivo de vídeo, audio o imagen.',
       unavailable: 'No está en esta versión de FFmpeg',
       failedGeneric: 'Algo salió mal: {error}',
-      updateAvailable: 'Xvert {v} está disponible.', updateNow: 'Actualizar ahora', updating: 'Actualizando…',
-      updateFailed: 'La actualización falló: {error}',
+      updateStopsJobs: 'Reiniciar ahora cancela las conversiones en curso.',
     },
   },
 };

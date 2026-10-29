@@ -151,14 +151,9 @@ function renderHeader() {
   $('actions').innerHTML = actions.join('');
 }
 
-let pendingUpdate = null; // newer release on GitHub, from check_update
-
-function renderUpdateBar() {
-  const bar = $('update-bar');
-  bar.hidden = !pendingUpdate;
-  if (!pendingUpdate) return;
-  bar.innerHTML = `<span>${esc(t('updateAvailable', { v: pendingUpdate.version }))}</span>` +
-    `<button class="btn primary small" data-act="update">${esc(t('updateNow'))}</button>`;
+// Read by updates.js before restarting into a new version.
+function updateBlocker() {
+  return busy() ? t('updateStopsJobs') : '';
 }
 
 function render() {
@@ -495,12 +490,6 @@ async function act(name, el) {
     case 'reset-dir': settings.outDir = ''; saveSettings(); render(); break;
     case 'download': downloadEngine(); break;
     case 'recheck': engine = null; render(); refreshEngine(); break;
-    case 'update': {
-      el.disabled = true;
-      el.textContent = t('updating');
-      invoke('install_update').catch((e) => { toast(t('updateFailed', { error: e })); renderUpdateBar(); });
-      break;
-    }
   }
 }
 
@@ -580,15 +569,14 @@ $('lang').addEventListener('change', (e) => {
   settings.language = language;
   saveSettings();
   render();
-  renderUpdateBar();
+  updates.render();
 });
 
 (async () => {
   settings = await invoke('get_settings');
   setLanguage(settings.language);
   $('lang').value = language;
-  window.__TAURI__.app.getVersion().then((v) => { document.querySelector('.ver').textContent = `v${v}`; });
+  updates.render();
   render();
   await refreshEngine();
-  invoke('check_update').then((u) => { pendingUpdate = u; renderUpdateBar(); });
 })();

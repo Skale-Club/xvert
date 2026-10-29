@@ -62,8 +62,6 @@ struct AppState {
     media: Mutex<HashMap<u32, media::Media>>,
     next_id: Mutex<u32>,
     jobs: job::Jobs,
-    /// A newer release found on GitHub, waiting for the user to install it.
-    update: Mutex<Option<updater::Update>>,
 }
 
 fn save_settings(settings: &Settings) {
@@ -296,27 +294,23 @@ fn open_site() {
     let _ = Command::new("explorer.exe").arg("https://skale.club").spawn();
 }
 
-/// Looks for a newer release; quietly None when offline.
+/// Where the background updater stands, for the updates panel.
 #[tauri::command]
-async fn check_update(app: AppHandle) -> Option<updater::Update> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let update = updater::check().ok().flatten();
-        *app.state::<AppState>().update.lock().unwrap() = update.clone();
-        update
-    })
-    .await
-    .ok()
-    .flatten()
+fn update_status() -> updater::Status {
+    updater::status()
 }
 
-/// Downloads and verifies the update, swaps the exe and restarts.
+/// Looks for a newer release now; the result arrives as `update-status`.
 #[tauri::command]
-async fn install_update(app: AppHandle) -> Result<(), String> {
-    let update = app.state::<AppState>().update.lock().unwrap().clone().ok_or("no update")?;
-    tauri::async_runtime::spawn_blocking(move || updater::install(&update))
-        .await
-        .map_err(|e| e.to_string())??;
+fn check_update() {
+    updater::check_now();
+}
+
+/// Installs the downloaded update now and restarts into it.
+#[tauri::command]
+fn restart_to_update(app: AppHandle) -> Result<(), String> {
     app.state::<AppState>().jobs.cancel_all();
+    updater::restart()?;
     app.exit(0);
     Ok(())
 }
@@ -334,7 +328,13 @@ fn main() {
             media: Mutex::new(HashMap::new()),
             next_id: Mutex::new(0),
             jobs: job::Jobs::default(),
-            update: Mutex::new(None),
+        })
+        .setup(|app| {
+            let handle = app.handle().clone();
+            updater::start(move |status| {
+                let _ = handle.emit("update-status", status);
+            });
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_settings,
@@ -351,8 +351,9 @@ fn main() {
             pick_folder,
             reveal,
             open_site,
+            update_status,
             check_update,
-            install_update
+            restart_to_update
         ])
         .on_window_event(|window, event| {
             // Closing the window stops any FFmpeg still running.
@@ -360,8 +361,14 @@ fn main() {
                 window.state::<AppState>().jobs.cancel_all();
             }
         })
-        .run(tauri::generate_context!())
-        .expect("failed to start Xvert");
+        .build(tauri::generate_context!())
+        .expect("failed to start Xvert")
+        .run(|_, event| {
+            // A downloaded update replaces the exe once the app closes.
+            if let tauri::RunEvent::Exit = event {
+                updater::apply();
+            }
+        });
 }
 
 #[cfg(test)]

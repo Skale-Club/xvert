@@ -13,9 +13,10 @@ publicly downloadable executable has been published. Build from source using the
 [development guide](docs/DEVELOPMENT.md). Future release binaries belong in
 [Releases](https://github.com/Skale-Club/xvert/releases).
 
-The app can offer signed updates when a newer release contains both an executable and its signature.
-Updates require internet access and are installed when you select the update action; your `Data`
-folder is retained.
+Once running, the app updates itself: it checks GitHub Releases when it opens and every 6 hours,
+downloads a newer signed version in the background and installs it when you close the app. The
+version button at the foot of the sidebar opens the updates panel, with **Check now** and
+**Restart now**. Your `Data` folder is kept.
 
 ## Run it
 
