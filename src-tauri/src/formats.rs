@@ -103,13 +103,17 @@ pub struct Options {
     pub quality: String,
     /// Largest picture height, never upscaled; 0 keeps the original.
     pub max_height: u32,
+    /// Output frames per second; 0 preserves the source (GIF uses its quality default).
+    pub fps: f64,
     /// Leave the sound out of videos.
     pub mute: bool,
+    /// Explicit opt-in for this run; remove the source only after verified success.
+    pub delete_original: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { quality: "balanced".into(), max_height: 0, mute: false }
+        Self { quality: "balanced".into(), max_height: 0, fps: 0.0, mute: false, delete_original: false }
     }
 }
 
@@ -151,6 +155,9 @@ pub fn args(media: &Media, format: &Format, options: &Options, output: &Path, en
     if format.kind == "audio" && !media.has_audio {
         return Err("noAudio".into());
     }
+    if format.kind == "video" && (!options.fps.is_finite() || (options.fps != 0.0 && !(1.0..=240.0).contains(&options.fps))) {
+        return Err("invalidFps".into());
+    }
     let mut a: Vec<String> = Vec::new();
     push(&mut a, &["-hide_banner", "-nostdin", "-y", "-v", "error"]);
     a.push("-i".into());
@@ -161,7 +168,7 @@ pub fn args(media: &Media, format: &Format, options: &Options, output: &Path, en
     match format.kind {
         "video" if format.id == "gif" => {
             let height = if o.max_height > 0 { o.max_height } else { 480 };
-            let fps = o.pick(20, 15, 10);
+            let fps = if o.fps > 0.0 { o.fps } else { o.pick(20.0, 15.0, 10.0) };
             push(&mut a, &["-map", "0:V:0", "-an", "-vf"]);
             a.push(format!(
                 "fps={fps},scale=-1:'min(ih,{height})':flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5"
@@ -176,7 +183,11 @@ pub fn args(media: &Media, format: &Format, options: &Options, output: &Path, en
                 a.push("-an".into());
             }
             a.push("-vf".into());
-            a.push(even_scale(o.max_height));
+            let mut filter = even_scale(o.max_height);
+            if o.fps > 0.0 {
+                filter.push_str(&format!(",fps={}", o.fps));
+            }
+            a.push(filter);
             let audio_rate = o.pick("192k", "160k", "128k");
             match format.id {
                 "mp4-hevc" => {
@@ -319,7 +330,7 @@ mod tests {
 
     #[test]
     fn builds_video_arguments() {
-        let o = Options { quality: "high".into(), max_height: 720, mute: false };
+        let o = Options { quality: "high".into(), max_height: 720, ..Options::default() };
         let mp4 = run(&media("video", true, false), "mp4", &o).unwrap();
         assert!(mp4.contains("-c:v libx264 -preset medium -crf 18"), "{mp4}");
         assert!(mp4.contains("-map 0:a:0") && mp4.contains("-c:a aac -b:a 192k") && mp4.contains("+faststart"));
@@ -347,5 +358,25 @@ mod tests {
         assert!(webp.contains("-vf scale=-1:'min(ih,600)'") && webp.contains("-quality 70") && !webp.contains("color=white"));
         assert!(run(&png, "ico", &o).unwrap().contains("force_original_aspect_ratio=decrease"));
         assert!(run(&png, "avif", &o).unwrap().contains("libaom-av1 -still-picture 1 -crf 40"));
+    }
+
+    #[test]
+    fn applies_fps_to_video_and_gif_only() {
+        let video = media("video", true, false);
+        let o = Options { fps: 29.97, ..Options::default() };
+        for id in ["mp4", "mp4-hevc", "webm", "mkv", "mov", "avi", "gif"] {
+            assert!(run(&video, id, &o).unwrap().contains("fps=29.97"), "{id}");
+        }
+        assert!(!run(&video, "mp4", &Options::default()).unwrap().contains("fps="));
+        assert!(run(&video, "gif", &Options::default()).unwrap().contains("fps=15,"));
+        assert!(!run(&video, "mp3", &o).unwrap().contains("fps="));
+        assert!(!run(&media("image", false, false), "png", &o).unwrap().contains("fps="));
+        for fps in [-1.0, 0.5, 241.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(run(&video, "mp4", &Options { fps, ..o.clone() }).unwrap_err(), "invalidFps");
+        }
+        let old: Options = serde_json::from_str(r#"{"quality":"high","maxHeight":720,"mute":true}"#).unwrap();
+        assert_eq!(old.fps, 0.0);
+        assert!(!old.delete_original);
+        assert!(old.mute && old.max_height == 720 && old.quality == "high");
     }
 }

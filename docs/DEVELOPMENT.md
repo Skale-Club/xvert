@@ -28,6 +28,7 @@ To check Rust code, run the included tests and build the executable:
 ~~~powershell
 cargo check --manifest-path src-tauri/Cargo.toml --locked
 cargo test --manifest-path src-tauri/Cargo.toml --release --locked
+npm test
 npm run build
 ~~~
 
@@ -44,10 +45,18 @@ when asked (SHA-256 checked, only the two programs extracted). `media.rs` runs f
 file into video, audio or image, and makes the preview pictures. `formats.rs` is the format table
 and the FFmpeg arguments for each, as pure functions. `job.rs` runs one conversion into
 `name.part.ext`, reads `-progress` output, kills FFmpeg on cancel and renames only finished files.
+Progress includes `total_size` for a live size projection. `estimate.js` supplies a deliberately
+broad pre-conversion range for video/audio and uses actual bytes written once enough output exists.
+The range is advisory: CRF and VBR encoding vary with content. `fps: 0` preserves video timing;
+GIF retains its quality-based default, and explicit FPS uses the FFmpeg fps filter.
 
 The window keeps the list and the queue (`app.js`): one video at a time, up to three audio files or
 pictures, four jobs in all. Each run gets a fresh job number used by `job` progress events and
 `cancel`. Files dragged onto the window arrive through Tauri's `tauri://drag-drop` event.
+`conversion.rs` coordinates completion for the window and MCP. Optional original deletion requires
+a nonempty, readable output of the expected kind and duration, plus an unchanged source snapshot.
+Cleanup failure returns a completed output with a notice. The window's opt-in is not persisted and
+resets when the batch finishes; MCP requires explicit `delete_original: true` for each call.
 
 All the Skale X apps use the same palette: navy surfaces, primary blue `#5173D6` and soft blue
 `#8FA9EE`. Keep English, Portuguese and Spanish UI strings consistent. Settings and exports use the
@@ -87,6 +96,12 @@ implementation and check links and commands.
   pictures and a non-media file; check previews, the skipped notice and the per-kind formats.
 - Convert with each quality and a picture-size cap; cancel one file and the whole queue; check
   that no `.part` files remain and that names never overwrite (`name (2).ext`).
+- Check original and explicit FPS, including fractional rates. During progress, file row and bar
+  nodes must remain mounted, the entrance animation must not restart, and the estimate should
+  update. Check estimate changes after switching format, FPS, quality, picture size and mute.
+- Test optional original deletion on disposable files only: off by default, enabled success,
+  conversion failure, cancellation, changed/locked source and output verification failure. Confirm
+  the batch opt-in resets and a deleted source cannot be queued again from the finished list.
 - Rename `ffmpeg.exe` away to test the download card and its progress, then check the three
   languages and both dialogs.
 

@@ -18,8 +18,9 @@ pub struct Tool {
     pub description: &'static str,
     /// JSON Schema of the arguments.
     pub input: Value,
-    /// False for tools that change something (they never delete anything).
+    /// False for tools that change something.
     pub read_only: bool,
+    pub destructive: bool,
     pub run: Box<dyn Fn(&Value) -> Result<Value, String>>,
 }
 
@@ -30,11 +31,17 @@ impl Tool {
         input: Value,
         run: impl Fn(&Value) -> Result<Value, String> + 'static,
     ) -> Self {
-        Self { name, description, input, read_only: true, run: Box::new(run) }
+        Self { name, description, input, read_only: true, destructive: false, run: Box::new(run) }
     }
 
     pub fn changing(mut self) -> Self {
         self.read_only = false;
+        self
+    }
+
+    pub fn destructive(mut self) -> Self {
+        self.read_only = false;
+        self.destructive = true;
         self
     }
 }
@@ -152,7 +159,7 @@ fn handle(message: &Value, name: &str, instructions: &str, tools: &[Tool]) -> Op
                 "inputSchema": t.input,
                 "annotations": {
                     "readOnlyHint": t.read_only,
-                    "destructiveHint": false,
+                    "destructiveHint": t.destructive,
                     "openWorldHint": false,
                 },
             })).collect::<Vec<_>>()
@@ -176,6 +183,15 @@ fn handle(message: &Value, name: &str, instructions: &str, tools: &[Tool]) -> Op
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn marks_tools_with_optional_deletion_as_destructive() {
+        let tools = vec![Tool::new("convert", "Converts with optional deletion.", no_input(), |_| Ok(json!({}))).destructive()];
+        let result = handle(&json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}), "Xvert", "", &tools).unwrap();
+        let hints = &result["result"]["tools"][0]["annotations"];
+        assert_eq!(hints["destructiveHint"], true);
+        assert_eq!(hints["readOnlyHint"], false);
+    }
 
     fn tools() -> Vec<Tool> {
         vec![

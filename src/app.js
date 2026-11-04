@@ -24,12 +24,15 @@ const ICONS = {
   arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
   retry: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
   trash: '<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/>',
+  chevron: '<path d="m6 9 6 6 6-6"/>',
+  settings: '<path d="M4 6h4m4 0h8M4 12h9m4 0h3M4 18h2m4 0h10"/><circle cx="10" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="18" r="2"/>',
 };
 
 const NAV = ['convert', 'engine'];
 const KINDS = ['video', 'audio', 'image'];
 const KIND_TITLE = { video: 'videos', audio: 'audios', image: 'images' };
 const HEIGHTS = [0, 2160, 1440, 1080, 720, 480];
+const FRAME_RATES = [0, 15, 23.976, 24, 25, 29.97, 30, 50, 59.94, 60, 120];
 /** How many of each kind may convert at once; videos use every core. */
 const LANES = { video: 1, audio: 3, image: 3 };
 
@@ -43,6 +46,10 @@ let downloading = null;  // { done, total } while FFmpeg downloads
 let reading = 0;         // files being read
 const items = [];        // files on the list, in order
 let jobCounter = 0;
+// Destructive opt-in belongs to the current batch, never to saved preferences.
+let deleteOriginal = false;
+// Disclosure state belongs to this session and survives settings/progress renders.
+const openOutputSections = new Set();
 
 // ---------- formatting ----------
 
@@ -115,6 +122,7 @@ function targetFor(kind) {
 
 /** Why an item can't become its target, or null. */
 function blocked(item) {
+  if (item.originalDeleted) return 'originalDeleted';
   const target = targetFor(item.kind);
   if (!target) return 'cannotConvert';
   if (target.kind === 'audio' && !item.hasAudio) return 'noAudio';
@@ -146,6 +154,8 @@ function renderHeader() {
   if (current === 'convert' && engine?.engine && items.length) {
     actions.push(`<button class="btn" data-act="add">${svg(ICONS.plus)}${esc(t('addFiles'))}</button>`);
     actions.push(`<button class="btn" data-act="folder">${svg(ICONS.folder)}${esc(t('addFolder'))}</button>`);
+    const completedCount = items.filter((item) => item.state === 'done').length;
+    if (completedCount) actions.push(`<button class="btn ghost" data-act="clear-completed" title="${esc(t('clearCompletedNote'))}">${svg(ICONS.check)}${esc(t('clearCompleted'))}<span class="action-count">${completedCount}</span></button>`);
     actions.push(`<button class="btn ghost" data-act="clear"${busy() ? ' disabled' : ''}>${esc(t('clear'))}</button>`);
   }
   $('actions').innerHTML = actions.join('');
@@ -157,6 +167,8 @@ function updateBlocker() {
 }
 
 function render() {
+  const panelScroll = pageEl.querySelector('.panel-scroll')?.scrollTop || 0;
+  pageEl.querySelectorAll('details[data-output-section]').forEach(rememberOutputSection);
   document.querySelectorAll('[data-t]').forEach((el) => { el.textContent = t(el.dataset.t); });
   renderNav();
   renderHeader();
@@ -169,6 +181,8 @@ function render() {
   } else {
     pageEl.innerHTML = convertPage();
   }
+  const panel = pageEl.querySelector('.panel-scroll');
+  if (panel) panel.scrollTop = panelScroll;
 }
 
 // ---------- engine ----------
@@ -232,20 +246,60 @@ function dropZone() {
   </div>`;
 }
 
+function sizeEstimate(item) {
+  return OutputEstimate.forItem(item, targetFor(item.kind), settings.options);
+}
+
+function estimateText(estimate) {
+  return estimate ? estimate.min === estimate.max ? bytes(estimate.min)
+    : `≈ ${bytes(estimate.min)} – ${bytes(estimate.max)}` : t('estimateUnknown');
+}
+
+function estimateCell(item) {
+  if (item.kind === 'image' || item.state === 'done' || blocked(item)) return '';
+  return `<small class="size-estimate" title="${esc(t('estimatedSize'))}">${esc(estimateText(sizeEstimate(item)))}</small>`;
+}
+
+function estimateSummary() {
+  const pending = items.filter((item) => item.state === 'done' || !blocked(item));
+  if (!pending.some((item) => item.state !== 'done' && item.kind !== 'image')) return '';
+  const estimates = pending.map(sizeEstimate);
+  const known = estimates.filter(Boolean);
+  const total = known.length ? known.reduce((sum, value) => ({ min: sum.min + value.min, max: sum.max + value.max }), { min: 0, max: 0 }) : null;
+  const missing = estimates.length - known.length;
+  return `<div class="estimate-card"><span>${esc(t('estimatedSize'))}</span><b>${esc(estimateText(total))}</b>` +
+    `<small>${esc(t(known.some((value) => value.live) ? 'estimateLiveNote' : 'estimateNote'))}</small>` +
+    `${missing ? `<small>${esc(t('estimatePartial', { n: missing }))}</small>` : ''}</div>`;
+}
+
+function paintEstimateSummary() {
+  const el = pageEl.querySelector('[data-estimate-summary]');
+  if (el) el.innerHTML = estimateSummary();
+}
+
+function progressInfo(item) {
+  const pct = item.duration > 0 ? Math.min(100, (item.seconds / item.duration) * 100) : null;
+  const eta = pct !== null && item.speed > 0 ? t('left', { time: clock(Math.max(0, item.duration - item.seconds) / item.speed) }) : '';
+  const label = pct === null ? t('working') : `${Math.floor(pct)}%`;
+  const detail = `${eta ? ` · ${eta}` : ''}${item.speed ? ` · ${item.speed.toLocaleString(locale(), { maximumFractionDigits: 1 })}×` : ''}`;
+  return { pct, label, detail };
+}
+
 function statusCell(item) {
   switch (item.state) {
     case 'working': {
-      const pct = item.duration > 0 ? Math.min(100, (item.seconds / item.duration) * 100) : null;
-      const eta = pct !== null && item.speed > 0 ? t('left', { time: clock((item.duration - item.seconds) / item.speed) }) : '';
+      const { pct, label, detail } = progressInfo(item);
       return `<div class="status working"><div class="pbar${pct === null ? ' busy' : ''}"><i style="width:${(pct ?? 35).toFixed(1)}%"></i></div>` +
-        `<small><b>${pct === null ? esc(t('working')) : `${Math.floor(pct)}%`}</b>${eta ? ` · ${esc(eta)}` : ''}${item.speed ? ` · ${item.speed.toLocaleString(locale(), { maximumFractionDigits: 1 })}×` : ''}</small></div>`;
+        `<small class="progress-text"><b>${esc(label)}</b><span>${esc(detail)}</span></small>${estimateCell(item)}</div>`;
     }
     case 'waiting':
-      return `<div class="status"><span class="tag">${esc(t('waiting'))}</span></div>`;
+      return `<div class="status"><span class="tag">${esc(t('waiting'))}</span>${estimateCell(item)}</div>`;
     case 'done': {
       const diff = item.result.size - item.size;
       const delta = diff <= 0 ? t('saved', { size: bytes(-diff) }) : t('grew', { size: bytes(diff) });
-      return `<div class="status done"><span class="tag good">${svg(ICONS.check)}${esc(t('done'))}</span><small>${esc(bytes(item.result.size))} · ${esc(delta)}</small></div>`;
+      const removal = item.result.originalDeleted ? `<small>${esc(t('originalDeleted'))}</small>`
+        : item.result.deleteOriginalError ? `<small class="cleanup-warning" title="${esc(t('deleteOriginalFailed', { error: errText(item.result.deleteOriginalError) }))}">${esc(t('originalKept'))}</small>` : '';
+      return `<div class="status done"><span class="tag good">${svg(ICONS.check)}${esc(t('done'))}</span><small>${esc(bytes(item.result.size))} · ${esc(delta)}</small>${removal}</div>`;
     }
     case 'failed':
       return `<div class="status failed"><span class="tag bad">${svg(ICONS.alert)}${esc(t('failed'))}</span><small title="${esc(item.error)}">${esc(item.error)}</small></div>`;
@@ -253,7 +307,7 @@ function statusCell(item) {
       return `<div class="status"><span class="tag">${esc(t('cancelled'))}</span></div>`;
     default: {
       const why = blocked(item);
-      return why ? `<div class="status failed"><small>${esc(t(why))}</small></div>` : `<div class="status"><span class="tag">${esc(t('ready'))}</span></div>`;
+      return why ? `<div class="status failed"><small>${esc(t(why))}</small></div>` : `<div class="status"><span class="tag">${esc(t('ready'))}</span>${estimateCell(item)}</div>`;
     }
   }
 }
@@ -272,7 +326,7 @@ function row(item) {
   const thumb = item.thumb
     ? `<img src="${item.thumb}" alt="" draggable="false">`
     : `<span class="k-${item.kind}">${svg(ICONS[item.kind])}</span>`;
-  return `<div class="file ${item.state}" data-item="${item.id}">
+  return `<div class="file ${item.state}" data-item="${item.id}" data-state="${item.state}">
     <div class="thumb k-${item.kind}">${thumb}<i class="kind-badge">${svg(ICONS[item.kind])}</i></div>
     <div class="file-text"><b title="${esc(item.path)}">${esc(item.name)}</b><small>${esc(meta(item))}</small></div>
     <span class="to">${svg(ICONS.arrow)}<b>${esc(item.state === 'done' ? item.result.label : target ? target.label : '?')}</b></span>
@@ -287,24 +341,61 @@ function formatChips(kind, group) {
   return `<div class="fmt-chips">${list.map((f) => `<button class="fmt${f.id === chosen ? ' on' : ''}" data-target="${kind}" data-format="${f.id}" title="${esc(f.detail)}"${busy() ? ' disabled' : ''}><b>${esc(f.label)}</b><small>${esc(f.detail)}</small></button>`).join('')}</div>`;
 }
 
+function rememberOutputSection(el) {
+  if (el.open) openOutputSections.add(el.dataset.outputSection);
+  else openOutputSections.delete(el.dataset.outputSection);
+}
+
+function outputDisclosure(id, title, detail, body, icon, kind = '', count = null) {
+  return `<details class="output-fold${kind ? ` k-${kind}` : ''}" data-output-section="${id}"${openOutputSections.has(id) ? ' open' : ''}>
+    <summary><span class="fold-icon" aria-hidden="true">${svg(ICONS[icon])}</span>
+      <span class="fold-copy"><b>${esc(title)}${count === null ? '' : `<span class="count">${count}</span>`}</b><small title="${esc(detail)}">${esc(detail)}</small></span>
+      <span class="fold-caret" aria-hidden="true">${svg(ICONS.chevron)}</span>
+    </summary>
+    <div class="fold-body">${body}</div>
+  </details>`;
+}
+
+function updateOutputToggle() {
+  const button = pageEl.querySelector('[data-act="toggle-options"]');
+  if (!button) return;
+  const expanded = Array.from(pageEl.querySelectorAll('details[data-output-section]')).some((el) => el.open);
+  button.setAttribute('aria-expanded', String(expanded));
+  button.querySelector('.toggle-label').textContent = t(expanded ? 'hideOptions' : 'showOptions');
+}
+
 function outputPanel() {
   const kinds = KINDS.filter((k) => items.some((i) => i.kind === k));
   const o = settings.options;
   const lock = busy() ? ' disabled' : '';
+  const sectionIds = [];
   const sections = kinds.map((kind) => {
     const count = items.filter((i) => i.kind === kind).length;
-    const head = `<div class="kind-head k-${kind}">${svg(ICONS[kind])}<b>${esc(t(KIND_TITLE[kind]))}</b><span class="count">${count}</span></div>`;
+    const target = targetFor(kind);
+    const detail = target ? `${target.label} · ${target.detail}` : t('cannotConvert');
+    sectionIds.push(`format-${kind}`);
     if (kind === 'video') {
-      return `<section>${head}<label class="sub">${esc(t('toVideo'))}</label>${formatChips('video', 'video')}<label class="sub">${esc(t('toAudio'))}</label>${formatChips('video', 'audio')}</section>`;
+      sectionIds.push('extract-audio');
+      const videoDetail = target?.kind === 'video' ? detail : t('chooseFormat');
+      const audioDetail = target?.kind === 'audio' ? detail : t('chooseFormat');
+      return outputDisclosure('format-video', t(KIND_TITLE.video), videoDetail, formatChips('video', 'video'), 'video', 'video', count)
+        + outputDisclosure('extract-audio', t('extractAudio'), audioDetail, formatChips('video', 'audio'), 'audio', 'audio');
     }
-    return `<section>${head}${formatChips(kind, kind)}</section>`;
+    return outputDisclosure(`format-${kind}`, t(KIND_TITLE[kind]), detail, formatChips(kind, kind), kind, kind, count);
   }).join('');
   const visual = kinds.some((k) => k !== 'audio');
   const quality = ['high', 'balanced', 'small'].map((q) => `<button class="seg${o.quality === q ? ' on' : ''}" data-quality="${q}"${lock}>${esc(t(q))}</button>`).join('');
   const heights = HEIGHTS.map((h) => `<option value="${h}"${o.maxHeight === h ? ' selected' : ''}>${h ? `${h}p` : esc(t('original'))}</option>`).join('');
+  const videoOutput = kinds.includes('video') && targetFor('video')?.kind === 'video';
+  const frameRates = FRAME_RATES.map((fps) => `<option value="${fps}"${(o.fps || 0) === fps ? ' selected' : ''}>${fps ? `${fps.toLocaleString(locale(), { maximumFractionDigits: 3 })} fps` : esc(t(targetFor('video')?.id === 'gif' ? 'gifAutoFps' : 'original'))}</option>`).join('');
   const where = settings.outDir
     ? `<code title="${esc(settings.outDir)}">${esc(settings.outDir)}</code><button class="btn ghost small" data-act="reset-dir"${lock}>${esc(t('reset'))}</button>`
     : `<span>${esc(t('besideOriginals'))}</span>`;
+  const optionSummary = [t(o.quality)];
+  if (visual) optionSummary.push(o.maxHeight ? `${o.maxHeight}p` : t('original'));
+  if (videoOutput) optionSummary.push(o.fps ? `${o.fps.toLocaleString(locale(), { maximumFractionDigits: 3 })} fps` : t(targetFor('video')?.id === 'gif' ? 'gifAutoFps' : 'originalFps'));
+  if (kinds.includes('video') && o.mute) optionSummary.push(t('muted'));
+  const expanded = [...sectionIds, 'quality', 'destination'].some((id) => openOutputSections.has(id));
 
   const runnable = items.filter((i) => i.state !== 'done' && !blocked(i)).length;
   const finished = items.filter((i) => i.state === 'done');
@@ -315,7 +406,7 @@ function outputPanel() {
   } else if (runnable) {
     main = `<button class="btn primary big wide" data-act="start">${svg(ICONS.convert)}${esc(runnable === 1 ? t('convertOne') : t('convertN', { n: runnable }))}</button>`;
   } else {
-    main = `<button class="btn big wide" data-act="again"${finished.length ? '' : ' disabled'}>${svg(ICONS.retry)}${esc(t('convertAgain'))}</button>`;
+    main = `<button class="btn big wide" data-act="again"${finished.some((item) => !blocked(item)) ? '' : ' disabled'}>${svg(ICONS.retry)}${esc(t('convertAgain'))}</button>`;
   }
   let summary = '';
   if (finished.length || failedCount) {
@@ -326,17 +417,26 @@ function outputPanel() {
     summary = `<p class="summary">${esc(parts.join(' · '))}</p>`;
   }
   return `<aside class="panel">
-    <h3>${esc(t('output'))}</h3>
-    <div class="panel-scroll">
+    <div class="panel-head"><h3>${esc(t('output'))}</h3>
+      <button class="panel-toggle" data-act="toggle-options" aria-controls="output-sections" aria-expanded="${expanded}"><span class="toggle-label">${esc(t(expanded ? 'hideOptions' : 'showOptions'))}</span><span class="fold-caret" aria-hidden="true">${svg(ICONS.chevron)}</span></button>
+    </div>
+    <div class="panel-scroll" id="output-sections">
     ${sections}
-    <section class="opts">
+    ${outputDisclosure('quality', t(visual ? 'qualityAndPicture' : 'quality'), optionSummary.join(' · '), `
       <label class="sub">${esc(t('quality'))}</label><div class="segmented">${quality}</div>
       ${visual ? `<label class="sub">${esc(t('maxSize'))}</label><select class="sel" data-act="height"${lock}>${heights}</select>` : ''}
+      ${videoOutput ? `<label class="sub" for="output-fps">${esc(t('frameRate'))}</label><select id="output-fps" class="sel" data-act="fps"${lock}>${frameRates}</select>` : ''}
       ${kinds.includes('video') ? `<label class="check"><input type="checkbox" data-act="mute"${o.mute ? ' checked' : ''}${lock}><span>${esc(t('mute'))}</span></label>` : ''}
-      <label class="sub">${esc(t('saveTo'))}</label><div class="where">${where}<button class="btn small" data-act="out-dir"${lock}>${esc(t('change'))}</button></div>
-    </section>
+    `, 'settings')}
+    ${outputDisclosure('destination', t('saveTo'), settings.outDir || t('besideOriginals'), `<div class="where">${where}<button class="btn small" data-act="out-dir"${lock}>${esc(t('change'))}</button></div>`, 'folder')}
     </div>
-    <div class="go">${main}${summary}</div>
+    <div class="go">
+      <div class="delete-choice">
+        <label class="check"><input id="delete-original" type="checkbox" data-act="delete-original" aria-describedby="delete-original-note"${deleteOriginal ? ' checked' : ''}${lock}><span>${esc(t('deleteOriginal'))}</span></label>
+        <small id="delete-original-note">${esc(t('deleteOriginalNote'))}</small>
+      </div>
+      <div data-estimate-summary>${estimateSummary()}</div>${main}${summary}
+    </div>
   </aside>`;
 }
 
@@ -348,10 +448,60 @@ function convertPage() {
   </div>`;
 }
 
-/** Repaints one row in place, so progress doesn't rebuild the page. */
+/** Clear list entries only; keep pending jobs and their mounted progress rows. */
+function clearCompleted() {
+  const ids = items.filter((item) => item.state === 'done').map((item) => item.id);
+  if (!ids.length) return;
+  const completed = new Set(ids);
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (!completed.has(items[i].id)) continue;
+    pageEl.querySelector(`[data-item="${items[i].id}"]`)?.remove();
+    items.splice(i, 1);
+  }
+  // remove_files releases cached metadata; it does not delete files on disk.
+  invoke('remove_files', { ids });
+  if (!items.length) {
+    deleteOriginal = false;
+    render();
+    return;
+  }
+  renderHeader();
+  const panel = pageEl.querySelector('.panel');
+  if (panel) {
+    const scrollTop = panel.querySelector('.panel-scroll').scrollTop;
+    panel.querySelectorAll('details[data-output-section]').forEach(rememberOutputSection);
+    panel.outerHTML = outputPanel();
+    pageEl.querySelector('.panel-scroll').scrollTop = scrollTop;
+  }
+}
+
+/** Keep the row and progress bar mounted: replacing the row restarts `rise`. */
 function paintRow(item) {
   const el = pageEl.querySelector(`[data-item="${item.id}"]`);
-  if (el) el.outerHTML = row(item);
+  if (!el) return;
+  if (el.dataset.state !== item.state) {
+    el.className = `file ${item.state}`;
+    el.dataset.state = item.state;
+    el.querySelector('.status').outerHTML = statusCell(item);
+    el.querySelector('.file-actions').innerHTML = rowActions(item);
+    el.querySelector('.to b').textContent = item.state === 'done' ? item.result.label : targetFor(item.kind)?.label || '?';
+  }
+  if (item.thumb && el.querySelector('.thumb img')?.getAttribute('src') !== item.thumb) {
+    const img = document.createElement('img');
+    img.src = item.thumb;
+    img.alt = '';
+    img.draggable = false;
+    el.querySelector('.thumb').firstElementChild.replaceWith(img);
+  }
+  if (item.state === 'working') {
+    const { pct, label, detail } = progressInfo(item);
+    el.querySelector('.pbar').classList.toggle('busy', pct === null);
+    el.querySelector('.pbar i').style.width = `${(pct ?? 35).toFixed(1)}%`;
+    el.querySelector('.progress-text b').textContent = label;
+    el.querySelector('.progress-text span').textContent = detail;
+    const estimate = el.querySelector('.size-estimate');
+    if (estimate) estimate.textContent = estimateText(sizeEstimate(item));
+  }
 }
 
 // ---------- adding files ----------
@@ -422,13 +572,16 @@ async function run(item) {
   item.state = 'working';
   item.seconds = 0;
   item.speed = 0;
+  item.totalSize = 0;
   item.job = ++jobCounter;
   paintRow(item);
   try {
-    const result = await invoke('convert', { job: item.job, id: item.id, format: target.id, options: settings.options, outDir: settings.outDir });
+    const result = await invoke('convert', { job: item.job, id: item.id, format: target.id, options: { ...settings.options, deleteOriginal }, outDir: settings.outDir });
     if (result) {
       item.state = 'done';
       item.result = { ...result, label: target.label };
+      item.originalDeleted = Boolean(result.originalDeleted);
+      if (result.deleteOriginalError) toast(t('deleteOriginalFailed', { error: errText(result.deleteOriginalError) }));
     } else {
       item.state = 'cancelled';
     }
@@ -438,15 +591,15 @@ async function run(item) {
   }
   item.job = null;
   pump();
-  if (busy()) paintRow(item);
-  else render(); // the panel's button and summary change when the queue empties
+  if (busy()) { paintRow(item); paintEstimateSummary(); renderHeader(); }
+  else { deleteOriginal = false; render(); } // require a new opt-in for the next batch
 }
 
 function cancelItem(item) {
   if (item.state === 'waiting') {
     item.state = 'cancelled';
     paintRow(item);
-    if (!busy()) render();
+    if (!busy()) { deleteOriginal = false; render(); }
   } else if (item.job) {
     invoke('cancel', { job: item.job });
   }
@@ -455,6 +608,7 @@ function cancelItem(item) {
 function cancelAll() {
   for (const item of items) if (item.state === 'waiting') item.state = 'cancelled';
   invoke('cancel_all');
+  if (!busy()) deleteOriginal = false;
   render();
 }
 
@@ -462,6 +616,13 @@ function cancelAll() {
 
 async function act(name, el) {
   switch (name) {
+    case 'toggle-options': {
+      const disclosures = Array.from(pageEl.querySelectorAll('details[data-output-section]'));
+      const open = !disclosures.some((section) => section.open);
+      disclosures.forEach((section) => { section.open = open; rememberOutputSection(section); });
+      updateOutputToggle();
+      break;
+    }
     case 'add': {
       const paths = await invoke('pick_files', { mediaLabel: t('mediaFiles'), allLabel: t('allFiles') }).catch(() => []);
       addPaths(paths);
@@ -475,10 +636,12 @@ async function act(name, el) {
     case 'clear': {
       const ids = items.map((i) => i.id);
       items.length = 0;
+      deleteOriginal = false;
       invoke('remove_files', { ids });
       render();
       break;
     }
+    case 'clear-completed': clearCompleted(); break;
     case 'start': startAll(); break;
     case 'again': startAll(true); break;
     case 'cancel-all': cancelAll(); break;
@@ -511,7 +674,7 @@ document.addEventListener('click', (e) => {
     render();
   } else if (d.remove) {
     const i = items.findIndex((x) => x.id === Number(d.remove));
-    if (i >= 0) { invoke('remove_files', { ids: [items[i].id] }); items.splice(i, 1); render(); }
+    if (i >= 0) { invoke('remove_files', { ids: [items[i].id] }); items.splice(i, 1); if (!items.length) deleteOriginal = false; render(); }
   } else if (d.cancel) {
     const item = items.find((x) => x.id === Number(d.cancel));
     if (item) cancelItem(item);
@@ -527,21 +690,38 @@ document.addEventListener('click', (e) => {
 
 document.addEventListener('change', (e) => {
   const d = e.target.dataset;
-  if (d.act === 'height') {
+  if (d.act === 'delete-original') {
+    deleteOriginal = e.target.checked;
+  } else if (d.act === 'height') {
     settings.options.maxHeight = Number(e.target.value);
     saveSettings();
+    render();
+  } else if (d.act === 'fps') {
+    settings.options.fps = Number(e.target.value);
+    saveSettings();
+    render();
   } else if (d.act === 'mute') {
     settings.options.mute = e.target.checked;
     saveSettings();
+    render();
   }
 });
+
+// Native details/summary supports mouse, Enter and Space without custom key handling.
+document.addEventListener('toggle', (e) => {
+  if (!e.target.matches('details[data-output-section]')) return;
+  rememberOutputSection(e.target);
+  updateOutputToggle();
+}, true);
 
 listen('job', ({ payload }) => {
   const item = items.find((i) => i.job === payload.job);
   if (!item || item.state !== 'working') return;
   item.seconds = payload.seconds;
   item.speed = payload.speed;
+  item.totalSize = payload.totalSize || 0;
   paintRow(item);
+  paintEstimateSummary();
 });
 
 listen('engine-progress', ({ payload }) => {

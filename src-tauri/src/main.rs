@@ -1,10 +1,11 @@
 // Xvert: portable video, audio and image converter for Windows. Drop files,
 // pick a format per kind (videos, music, pictures) and convert; FFmpeg does
-// the work. The originals are never changed. No installer, no administrator
+// the work. Original removal is optional after verified success. No installer, no administrator
 // rights.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod engine;
+mod conversion;
 mod formats;
 mod job;
 mod mcp;
@@ -211,19 +212,13 @@ struct JobProgress {
     job: u32,
     seconds: f64,
     speed: f64,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Converted {
-    path: String,
-    size: u64,
+    total_size: u64,
 }
 
 /// Converts file `id` to `format`. `job` is a fresh number for each run, used
 /// for "job" progress events and to cancel. None when cancelled.
 #[tauri::command]
-async fn convert(app: AppHandle, job: u32, id: u32, format: String, options: formats::Options, out_dir: String) -> Result<Option<Converted>, String> {
+async fn convert(app: AppHandle, job: u32, id: u32, format: String, options: formats::Options, out_dir: String) -> Result<Option<conversion::Completed>, String> {
     let state = app.state::<AppState>();
     let engine = current_engine(&state)?;
     let media = state.media.lock().unwrap().get(&id).cloned().ok_or("notFound")?;
@@ -243,9 +238,8 @@ async fn convert(app: AppHandle, job: u32, id: u32, format: String, options: for
     let app2 = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let state = app2.state::<AppState>();
-        let args = formats::args(&media, format, &options, &job::part_path(&output), &engine.encoders)?;
-        let outcome = job::run(&engine, &state.jobs, job, &args, &output, |seconds, speed| {
-            let _ = app2.emit("job", JobProgress { job, seconds, speed });
+        let outcome = conversion::run(&engine, &state.jobs, job, &media, format, &options, &output, |seconds, speed, total_size| {
+            let _ = app2.emit("job", JobProgress { job, seconds, speed, total_size });
         });
         job::release(&state.jobs, &output);
         outcome
@@ -253,8 +247,8 @@ async fn convert(app: AppHandle, job: u32, id: u32, format: String, options: for
     .await
     .map_err(|e| e.to_string())??;
     Ok(match result {
-        job::Outcome::Done(path, size) => Some(Converted { path: path.display().to_string(), size }),
-        job::Outcome::Cancelled => None,
+        conversion::Outcome::Done(done) => Some(done),
+        conversion::Outcome::Cancelled => None,
     })
 }
 
@@ -316,6 +310,7 @@ fn restart_to_update(app: AppHandle) -> Result<(), String> {
 }
 
 fn main() {
+    if updater::verify_cli() { return; }
     updater::finish_previous();
     portable::sync_appinfo();
     if mcp::requested() {
@@ -407,11 +402,17 @@ mod tests {
                 if !formats::accepts(format, kind) {
                     continue;
                 }
-                let options = formats::Options { max_height: if n % 2 == 0 { 120 } else { 0 }, ..Default::default() };
+                let options = formats::Options {
+                    max_height: if n % 2 == 0 { 120 } else { 0 },
+                    // GIF frame delays use centiseconds, so test an exact rate there.
+                    fps: if id == "gif" { 10.0 } else if format.kind == "video" { 29.97 } else { 0.0 },
+                    ..Default::default()
+                };
                 let output = job::reserve(&jobs, &dir, source, format.ext);
                 let args = formats::args(&m, format, &options, &job::part_path(&output), &engine.encoders).unwrap();
                 n += 1;
-                let outcome = job::run(&engine, &jobs, n, &args, &output, |_, _| {});
+                let bytes_written = std::cell::Cell::new(0);
+                let outcome = job::run(&engine, &jobs, n, &args, &output, |_, _, size| bytes_written.set(size));
                 job::release(&jobs, &output);
                 let Ok(job::Outcome::Done(path, size)) = outcome else {
                     panic!("{} -> {id} failed: {:?}", m.name, outcome.err());
@@ -420,6 +421,12 @@ mod tests {
                 let back = media::probe(&engine, &path).unwrap_or_else(|e| panic!("{} -> {id}: {e}", m.name));
                 let expected = if id == "gif" { "video" } else { format.kind };
                 assert_eq!(back.kind, expected, "{} -> {id}", m.name);
+                if format.kind == "video" {
+                    assert!((back.fps - options.fps).abs() < 0.02, "{id}: {} fps", back.fps);
+                }
+                if id == "mp4" {
+                    assert!(bytes_written.get() > 0, "FFmpeg must report output bytes for live estimates");
+                }
                 if options.max_height > 0 && back.height > 0 && id != "ico" {
                     assert!(back.height <= 120, "{} -> {id} is {}px high", m.name, back.height);
                 }
@@ -447,7 +454,7 @@ mod tests {
             canceller.cancel(7);
         });
         let started = Instant::now();
-        let outcome = job::run(&engine, &jobs, 7, &args, &output, |_, _| {}).unwrap();
+        let outcome = job::run(&engine, &jobs, 7, &args, &output, |_, _, _| {}).unwrap();
         assert!(matches!(outcome, job::Outcome::Cancelled));
         assert!(started.elapsed() < Duration::from_secs(10));
         assert!(!output.exists() && !job::part_path(&output).exists());

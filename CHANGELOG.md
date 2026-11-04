@@ -1,7 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-11-04
 
+- Internal signed downloads and updates through a stable per-app manifest endpoint.
+- Missing feeds report an error; staged packages are verified again before replacement.
+- Release automation publishes the executable, signature and latest.json together.
+
+- Add Clear completed to remove successful queue entries while preserving saved files and active,
+  pending, failed or cancelled jobs.
+- Separate video output formats and audio extraction into independently collapsible sections.
+- Make output formats, quality/picture settings and destination collapsible, with selected-value
+  summaries and a control to show/hide all options. Keep conversion actions visible.
+- Add optional permanent deletion of originals after verified conversion success, with per-batch
+  opt-in, preservation on failure/cancellation and notices when originals cannot be removed.
+- Replace the Xvert product logo with the approved folded-file mark (A — Dobra limpa), including
+  the interface, Windows executable and PortableApps menu icons.
 - `Xvert.exe --mcp` runs a local MCP server (no window) for Claude Code, Codex and other MCP
   clients: FFmpeg status, reading media files and converting one file (never overwrites).
 

@@ -1,9 +1,9 @@
 //! What Xvert offers over MCP (`Xvert.exe --mcp`): FFmpeg's status, reading
 //! media files and converting them. Converting only adds new files; the
-//! originals are never changed.
+//! originals are kept unless delete_original is explicitly enabled for a conversion.
 
 use crate::mcp::{self, Tool};
-use crate::{engine, formats, job, media};
+use crate::{conversion, engine, formats, job, media};
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -12,6 +12,7 @@ use std::rc::Rc;
 const INSTRUCTIONS: &str = "Xvert converts video, audio and images with FFmpeg. engine_status says whether \
 FFmpeg is there and which formats it can write; probe reads a file or folder (kind, duration, size, \
 codecs); convert writes a converted copy beside the original or in out_dir, never overwriting anything. \
+delete_original is false by default; explicit true permanently removes the original only after verified success. \
 Video can become video, audio or GIF; audio becomes audio; images become images.";
 
 type Shared = Rc<RefCell<Option<engine::Engine>>>;
@@ -60,15 +61,19 @@ fn convert(engine: &Shared, jobs: &job::Jobs, id: u32, args: &Value) -> Result<V
     let options = formats::Options {
         quality: mcp::optional_text(args, "quality").unwrap_or_else(|| "balanced".into()),
         max_height: mcp::number(args, "max_height", 0) as u32,
+        fps: match args.get("fps") {
+            None => 0.0,
+            Some(value) => value.as_f64().ok_or("fps must be a number.")?,
+        },
         mute: mcp::flag(args, "mute"),
+        delete_original: mcp::flag(args, "delete_original"),
     };
     let output = job::reserve(jobs, &dir, &source, format.ext);
-    let ffmpeg_args = formats::args(&media, format, &options, &job::part_path(&output), &engine.encoders);
-    let outcome = ffmpeg_args.and_then(|a| job::run(&engine, jobs, id, &a, &output, |_, _| {}));
+    let outcome = conversion::run(&engine, jobs, id, &media, format, &options, &output, |_, _, _| {});
     job::release(jobs, &output);
     match outcome? {
-        job::Outcome::Done(path, size) => Ok(json!({ "path": path.display().to_string(), "size": size })),
-        job::Outcome::Cancelled => Err("Cancelled.".into()),
+        conversion::Outcome::Done(done) => serde_json::to_value(done).map_err(|e| e.to_string()),
+        conversion::Outcome::Cancelled => Err("Cancelled.".into()),
     }
 }
 
@@ -132,7 +137,9 @@ pub fn serve() {
                     },
                     "quality": { "type": "string", "enum": ["high", "balanced", "small"], "description": "Default balanced; lossless formats ignore it." },
                     "max_height": { "type": "integer", "description": "Largest picture height in pixels, never upscaled; 0 keeps the original." },
+                    "fps": { "type": "number", "minimum": 0, "maximum": 240, "description": "Output frame rate (1–240); 0 or omitted preserves the source. GIF defaults to 20/15/10 by quality." },
                     "mute": { "type": "boolean", "description": "Leave the sound out of a video." },
+                    "delete_original": { "type": "boolean", "default": false, "description": "Explicit opt-in: permanently delete the original only after successful conversion and output verification. Returns originalDeleted and deleteOriginalError; failure to delete keeps the completed output." },
                     "out_dir": { "type": "string", "description": "Folder for the new file; default beside the original." },
                 },
                 "required": ["path", "format"],
@@ -143,7 +150,7 @@ pub fn serve() {
                 convert(&engine, &jobs, id, args)
             },
         )
-        .changing(),
+        .destructive(),
     ];
     mcp::serve("Xvert", "xvert.json", INSTRUCTIONS, tools);
 }

@@ -14,11 +14,26 @@ use std::sync::{Arc, Mutex};
 #[derive(Default)]
 pub struct Jobs {
     running: Mutex<HashMap<u32, Arc<Mutex<Child>>>>,
+    /// Includes output verification/cleanup after the FFmpeg process has exited.
+    active: Mutex<HashSet<u32>>,
     cancelled: Mutex<HashSet<u32>>,
     reserved: Mutex<HashSet<PathBuf>>,
 }
 
 impl Jobs {
+    pub fn begin_conversion(&self, id: u32) {
+        self.active.lock().unwrap().insert(id);
+    }
+
+    pub fn end_conversion(&self, id: u32) {
+        self.active.lock().unwrap().remove(&id);
+        self.cancelled.lock().unwrap().remove(&id);
+    }
+
+    pub fn is_cancelled(&self, id: u32) -> bool {
+        self.cancelled.lock().unwrap().contains(&id)
+    }
+
     pub fn cancel(&self, id: u32) {
         self.cancelled.lock().unwrap().insert(id);
         if let Some(child) = self.running.lock().unwrap().get(&id) {
@@ -27,7 +42,8 @@ impl Jobs {
     }
 
     pub fn cancel_all(&self) {
-        let ids: Vec<u32> = self.running.lock().unwrap().keys().copied().collect();
+        let mut ids: HashSet<u32> = self.running.lock().unwrap().keys().copied().collect();
+        ids.extend(self.active.lock().unwrap().iter().copied());
         for id in ids {
             self.cancel(id);
         }
@@ -71,6 +87,10 @@ pub enum Outcome {
     Cancelled,
 }
 
+fn total_size(line: &str) -> Option<u64> {
+    line.strip_prefix("total_size=")?.trim().parse().ok()
+}
+
 /// Picks the output name and holds it until `release`.
 pub fn reserve(jobs: &Jobs, dir: &Path, source: &Path, ext: &str) -> PathBuf {
     let stem = source.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "output".into());
@@ -85,8 +105,8 @@ pub fn release(jobs: &Jobs, path: &Path) {
 }
 
 /// Runs FFmpeg with `args` (whose last item is the part file) and reports
-/// (seconds written, speed) as it goes.
-pub fn run(engine: &Engine, jobs: &Jobs, id: u32, args: &[String], output: &Path, progress: impl Fn(f64, f64)) -> Result<Outcome, String> {
+/// (seconds written, speed, bytes written) as it goes.
+pub fn run(engine: &Engine, jobs: &Jobs, id: u32, args: &[String], output: &Path, progress: impl Fn(f64, f64, u64)) -> Result<Outcome, String> {
     let part = part_path(output);
     let mut child = engine::command(&engine.ffmpeg)
         .args(args)
@@ -111,13 +131,16 @@ pub fn run(engine: &Engine, jobs: &Jobs, id: u32, args: &[String], output: &Path
         text
     });
     let (mut at, mut rate) = (0.0, 0.0);
+    let mut size = 0;
     for line in BufReader::new(stdout).lines().map_while(Result::ok) {
         if let Some(s) = seconds(&line) {
             at = s;
         } else if let Some(s) = speed(&line) {
             rate = s;
+        } else if let Some(bytes) = total_size(&line) {
+            size = bytes;
         } else if line.starts_with("progress=") {
-            progress(at, rate);
+            progress(at, rate, size);
         }
     }
     let status = child.lock().unwrap().wait().map_err(|e| e.to_string());
@@ -152,6 +175,20 @@ mod tests {
         assert_eq!(seconds("out_time_us=N/A"), None);
         assert_eq!(speed("speed=12.1x"), Some(12.1));
         assert_eq!(speed("speed=N/A"), None);
+        assert_eq!(total_size("total_size=123456"), Some(123456));
+        assert_eq!(total_size("total_size=N/A"), None);
+        assert_eq!(total_size("total_size=-1"), None);
+    }
+
+    #[test]
+    fn cancel_all_includes_conversion_cleanup_after_ffmpeg_exits() {
+        let jobs = Jobs::default();
+        jobs.begin_conversion(7);
+        jobs.cancel_all();
+        assert!(jobs.is_cancelled(7));
+        jobs.end_conversion(7);
+        assert!(!jobs.is_cancelled(7));
+        assert!(jobs.active.lock().unwrap().is_empty());
     }
 
     #[test]
