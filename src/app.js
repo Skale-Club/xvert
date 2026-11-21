@@ -155,7 +155,7 @@ function renderHeader() {
     actions.push(`<button class="btn" data-act="add">${svg(ICONS.plus)}${esc(t('addFiles'))}</button>`);
     actions.push(`<button class="btn" data-act="folder">${svg(ICONS.folder)}${esc(t('addFolder'))}</button>`);
     const completedCount = items.filter((item) => item.state === 'done').length;
-    if (completedCount) actions.push(`<button class="btn ghost" data-act="clear-completed" title="${esc(t('clearCompletedNote'))}">${svg(ICONS.check)}${esc(t('clearCompleted'))}<span class="action-count">${completedCount}</span></button>`);
+    if (completedCount) actions.push(`<button class="btn ghost" data-act="clear-completed" title="${esc(t('clearCompletedNote'))}">${svg(ICONS.check)}${esc(t('clearCompleted'))}<span class="action-count readout">${completedCount}</span></button>`);
     actions.push(`<button class="btn ghost" data-act="clear"${busy() ? ' disabled' : ''}>${esc(t('clear'))}</button>`);
   }
   $('actions').innerHTML = actions.join('');
@@ -257,7 +257,7 @@ function estimateText(estimate) {
 
 function estimateCell(item) {
   if (item.kind === 'image' || item.state === 'done' || blocked(item)) return '';
-  return `<small class="size-estimate" title="${esc(t('estimatedSize'))}">${esc(estimateText(sizeEstimate(item)))}</small>`;
+  return `<small class="size-estimate readout" title="${esc(t('estimatedSize'))}">${esc(estimateText(sizeEstimate(item)))}</small>`;
 }
 
 function estimateSummary() {
@@ -267,7 +267,7 @@ function estimateSummary() {
   const known = estimates.filter(Boolean);
   const total = known.length ? known.reduce((sum, value) => ({ min: sum.min + value.min, max: sum.max + value.max }), { min: 0, max: 0 }) : null;
   const missing = estimates.length - known.length;
-  return `<div class="estimate-card"><span>${esc(t('estimatedSize'))}</span><b>${esc(estimateText(total))}</b>` +
+  return `<div class="estimate-card"><span>${esc(t('estimatedSize'))}</span><b class="readout">${esc(estimateText(total))}</b>` +
     `<small>${esc(t(known.some((value) => value.live) ? 'estimateLiveNote' : 'estimateNote'))}</small>` +
     `${missing ? `<small>${esc(t('estimatePartial', { n: missing }))}</small>` : ''}</div>`;
 }
@@ -290,7 +290,7 @@ function statusCell(item) {
     case 'working': {
       const { pct, label, detail } = progressInfo(item);
       return `<div class="status working"><div class="pbar${pct === null ? ' busy' : ''}"><i style="width:${(pct ?? 35).toFixed(1)}%"></i></div>` +
-        `<small class="progress-text"><b>${esc(label)}</b><span>${esc(detail)}</span></small>${estimateCell(item)}</div>`;
+        `<small class="progress-text readout"><b>${esc(label)}</b><span>${esc(detail)}</span></small>${estimateCell(item)}</div>`;
     }
     case 'waiting':
       return `<div class="status"><span class="tag">${esc(t('waiting'))}</span>${estimateCell(item)}</div>`;
@@ -299,7 +299,7 @@ function statusCell(item) {
       const delta = diff <= 0 ? t('saved', { size: bytes(-diff) }) : t('grew', { size: bytes(diff) });
       const removal = item.result.originalDeleted ? `<small>${esc(t('originalDeleted'))}</small>`
         : item.result.deleteOriginalError ? `<small class="cleanup-warning" title="${esc(t('deleteOriginalFailed', { error: errText(item.result.deleteOriginalError) }))}">${esc(t('originalKept'))}</small>` : '';
-      return `<div class="status done"><span class="tag good">${svg(ICONS.check)}${esc(t('done'))}</span><small>${esc(bytes(item.result.size))} · ${esc(delta)}</small>${removal}</div>`;
+      return `<div class="status done"><span class="tag good">${svg(ICONS.check)}${esc(t('done'))}</span><small class="readout">${esc(bytes(item.result.size))} · ${esc(delta)}</small>${removal}</div>`;
     }
     case 'failed':
       return `<div class="status failed"><span class="tag bad">${svg(ICONS.alert)}${esc(t('failed'))}</span><small title="${esc(item.error)}">${esc(item.error)}</small></div>`;
@@ -349,7 +349,7 @@ function rememberOutputSection(el) {
 function outputDisclosure(id, title, detail, body, icon, kind = '', count = null) {
   return `<details class="output-fold${kind ? ` k-${kind}` : ''}" data-output-section="${id}"${openOutputSections.has(id) ? ' open' : ''}>
     <summary><span class="fold-icon" aria-hidden="true">${svg(ICONS[icon])}</span>
-      <span class="fold-copy"><b>${esc(title)}${count === null ? '' : `<span class="count">${count}</span>`}</b><small title="${esc(detail)}">${esc(detail)}</small></span>
+      <span class="fold-copy"><b>${esc(title)}${count === null ? '' : `<span class="count readout">${count}</span>`}</b><small title="${esc(detail)}">${esc(detail)}</small></span>
       <span class="fold-caret" aria-hidden="true">${svg(ICONS.chevron)}</span>
     </summary>
     <div class="fold-body">${body}</div>
@@ -423,9 +423,9 @@ function outputPanel() {
     <div class="panel-scroll" id="output-sections">
     ${sections}
     ${outputDisclosure('quality', t(visual ? 'qualityAndPicture' : 'quality'), optionSummary.join(' · '), `
-      <label class="sub">${esc(t('quality'))}</label><div class="segmented">${quality}</div>
-      ${visual ? `<label class="sub">${esc(t('maxSize'))}</label><select class="sel" data-act="height"${lock}>${heights}</select>` : ''}
-      ${videoOutput ? `<label class="sub" for="output-fps">${esc(t('frameRate'))}</label><select id="output-fps" class="sel" data-act="fps"${lock}>${frameRates}</select>` : ''}
+      <label class="sub silk">${esc(t('quality'))}</label><div class="segmented">${quality}</div>
+      ${visual ? `<label class="sub silk">${esc(t('maxSize'))}</label><select class="sel" data-act="height"${lock}>${heights}</select>` : ''}
+      ${videoOutput ? `<label class="sub silk" for="output-fps">${esc(t('frameRate'))}</label><select id="output-fps" class="sel" data-act="fps"${lock}>${frameRates}</select>` : ''}
       ${kinds.includes('video') ? `<label class="check"><input type="checkbox" data-act="mute"${o.mute ? ' checked' : ''}${lock}><span>${esc(t('mute'))}</span></label>` : ''}
     `, 'settings')}
     ${outputDisclosure('destination', t('saveTo'), settings.outDir || t('besideOriginals'), `<div class="where">${where}<button class="btn small" data-act="out-dir"${lock}>${esc(t('change'))}</button></div>`, 'folder')}

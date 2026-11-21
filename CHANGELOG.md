@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Move to the Skale Club family design (skale.css v2) with Xvert's render-orange signal: brand
+  glows, the drop zone, the active row, the output panel and selected formats follow the signal;
+  text on signal fills uses dark ink. Option labels are silkscreen labels and changing numbers
+  (progress, sizes, estimates, counts, version) use mono readouts.
+- Replace the folded-file logo with the family mark (orange tile, solid and outline triangles) in
+  the interface, the Windows executable and the PortableApps menu icons. `make-icon.ps1` now draws
+  it without npm.
+
 ## 0.2.0 — 2026-11-04
 
 - Internal signed downloads and updates through a stable per-app manifest endpoint.
