@@ -1,7 +1,7 @@
 {
   "name": "xvert",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.3.1",
   "scripts": {
     "test": "node --test scripts/*.test.cjs",
     "dev": "tauri dev",
