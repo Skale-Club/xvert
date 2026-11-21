@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-11-20
 
 - Move to the Skale Club family design (skale.css v2) with Xvert's render-orange signal: brand
   glows, the drop zone, the active row, the output panel and selected formats follow the signal;
